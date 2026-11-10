@@ -45,7 +45,7 @@ def rpc(method, params=None, auth=True, retries=1):
     for _ in range(retries):
         try:
             req = urllib.request.Request(URL, data=data, headers={"Content-Type": "application/json-rpc"})
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=300) as resp:
                 out = json.load(resp)
             if "error" in out:
                 e = out["error"]
@@ -418,4 +418,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # La configuracion es idempotente: si una llamada a la API se agota (arranque en frio con la
+    # maquina cargada) se reintenta el proceso completo en lugar de dejar la configuracion a medias.
+    for attempt in range(1, 4):
+        try:
+            main()
+            break
+        except ApiError as exc:
+            log("ERROR (intento %d/3): %s" % (attempt, exc))
+            if attempt == 3:
+                sys.exit(1)
+            time.sleep(10)
