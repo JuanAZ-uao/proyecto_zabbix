@@ -1,0 +1,266 @@
+# ==========================================================================
+#  Proyecto 7 - Monitoreo de infraestructura con Zabbix 6.0 LTS (Docker Compose)
+#  Servicios Telematicos 2026-02
+#
+#  Arranque completo:   docker compose up -d --build
+#  Frontend Zabbix:     http://localhost:8080   (Admin / zabbix)
+#  Correos de alerta:   http://localhost:8025   (Mailhog)
+# ==========================================================================
+name: zabbix-lab
+
+# ---------- Bloques reutilizables ----------
+x-lab-host: &lab-host
+  restart: unless-stopped
+  stop_grace_period: 20s
+  cpus: 1.0                 # el limite de CPU/RAM hace que las metricas cgroup sean por contenedor
+  networks:
+    - lab-net
+  tmpfs:
+    - /data:size=64m        # "particion de datos" de 64 MB para probar la alerta de disco > 90 %
+  environment: &lab-host-env
+    TZ: ${TZ:-America/Bogota}
+
+services:
+  # ------------------------------------------------------------------
+  #  PLATAFORMA ZABBIX
+  # ------------------------------------------------------------------
+  zabbix-db:
+    image: postgres:${POSTGRES_VERSION:-15-alpine}
+    container_name: zabbix-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-zabbix}
+      POSTGRES_USER: ${POSTGRES_USER:-zabbix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zabbix_db_pass}
+      TZ: ${TZ:-America/Bogota}
+    volumes:
+      - zabbix-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.5
+
+  zabbix-server:
+    build:
+      context: ./docker/zabbix-server          # imagen Zabbix personalizada (requisito del catalogo)
+      args:
+        ZABBIX_VERSION: ${ZABBIX_VERSION:-6.0.49}
+    image: lab/zabbix-server:${ZABBIX_VERSION:-6.0.49}
+    container_name: zabbix-server
+    restart: unless-stopped
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: ${POSTGRES_DB:-zabbix}
+      POSTGRES_USER: ${POSTGRES_USER:-zabbix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zabbix_db_pass}
+      ZBX_CACHESIZE: 64M
+      TZ: ${TZ:-America/Bogota}
+    volumes:
+      # Parametros extra del servidor (Include=/etc/zabbix/zabbix_server.conf.d/*.conf)
+      - ./config/server/zabbix_server.conf.d:/etc/zabbix/zabbix_server.conf.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 10051"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.6
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:alpine-${ZABBIX_VERSION:-6.0.49}
+    container_name: zabbix-web
+    restart: unless-stopped
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+      zabbix-server:
+        condition: service_started
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_DB: ${POSTGRES_DB:-zabbix}
+      POSTGRES_USER: ${POSTGRES_USER:-zabbix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zabbix_db_pass}
+      ZBX_SERVER_NAME: "Laboratorio Zabbix - Servicios Telematicos"
+      PHP_TZ: ${TZ:-America/Bogota}
+    ports:
+      - "${WEB_PORT:-8080}:8080"      # unico puerto del stack Zabbix publicado al host
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/index.php"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.7
+
+  # Agente oficial que monitorea al propio Zabbix Server ("Zabbix server health")
+  zabbix-agent:
+    image: zabbix/zabbix-agent2:alpine-${ZABBIX_VERSION:-6.0.49}
+    container_name: zabbix-agent
+    restart: unless-stopped
+    environment:
+      ZBX_HOSTNAME: "Zabbix server"
+      ZBX_SERVER_HOST: 172.28.0.0/24
+      ZBX_PASSIVE_ALLOW: "true"
+      ZBX_ACTIVE_ALLOW: "false"
+      TZ: ${TZ:-America/Bogota}
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.9
+
+  mailhog:
+    image: mailhog/mailhog:${MAILHOG_VERSION:-v1.0.1}
+    container_name: mailhog
+    restart: unless-stopped
+    ports:
+      - "${MAILHOG_UI_PORT:-8025}:8025"   # UI para ver las alertas (SMTP 1025 queda interno)
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.8
+
+  # ------------------------------------------------------------------
+  #  HOSTS MONITOREADOS (servicio + Zabbix Agent 2 con supervisord)
+  # ------------------------------------------------------------------
+  lab-web:
+    <<: *lab-host
+    build:
+      context: ./docker
+      dockerfile: web/Dockerfile
+    image: lab/host-web:1.0
+    container_name: lab-web
+    hostname: lab-web
+    mem_limit: 128m
+    volumes:
+      - ./config/web/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./config/web/index.html:/usr/share/nginx/html/index.html:ro
+      # Configuracion del agente Zabbix (montada como volumen, solo lectura)
+      - ./config/agent/zabbix_agent2.conf:/etc/zabbix/zabbix_agent2.conf:ro
+      - ./config/agent/lab-userparameters.conf:/etc/zabbix/zabbix_agent2.d/lab-userparameters.conf:ro
+      - ./config/agent/lab-cgroup.sh:/usr/local/bin/lab-cgroup.sh:ro
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.10
+
+  lab-db:
+    <<: *lab-host
+    build:
+      context: ./docker
+      dockerfile: db/Dockerfile
+    image: lab/host-db:1.0
+    container_name: lab-db
+    hostname: lab-db
+    mem_limit: 768m
+    stop_grace_period: 40s
+    environment:
+      <<: *lab-host-env
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root_lab_pass}
+      MYSQL_DATABASE: laboratorio
+      ZBX_MONITOR_USER: ${ZBX_MONITOR_USER:-zbx_monitor}
+      ZBX_MONITOR_PASSWORD: ${ZBX_MONITOR_PASSWORD:-zbx_monitor_pass}
+    volumes:
+      - lab-db-data:/var/lib/mysql
+      - ./config/db/initdb:/docker-entrypoint-initdb.d:ro
+      # Configuracion del agente Zabbix (montada como volumen, solo lectura)
+      - ./config/agent/zabbix_agent2.conf:/etc/zabbix/zabbix_agent2.conf:ro
+      - ./config/agent/lab-userparameters.conf:/etc/zabbix/zabbix_agent2.d/lab-userparameters.conf:ro
+      - ./config/agent/lab-cgroup.sh:/usr/local/bin/lab-cgroup.sh:ro
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.11
+
+  lab-dns:
+    <<: *lab-host
+    build:
+      context: ./docker
+      dockerfile: dns/Dockerfile
+    image: lab/host-dns:1.0
+    container_name: lab-dns
+    hostname: lab-dns
+    mem_limit: 128m
+    volumes:
+      - ./config/dns/named.conf.options:/etc/bind/named.conf.options:ro
+      - ./config/dns/named.conf.local:/etc/bind/named.conf.local:ro
+      - ./config/dns/zones:/etc/bind/zones:ro
+      # Configuracion del agente Zabbix (montada como volumen, solo lectura)
+      - ./config/agent/zabbix_agent2.conf:/etc/zabbix/zabbix_agent2.conf:ro
+      - ./config/agent/lab-userparameters.conf:/etc/zabbix/zabbix_agent2.d/lab-userparameters.conf:ro
+      - ./config/agent/lab-cgroup.sh:/usr/local/bin/lab-cgroup.sh:ro
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.12
+
+  lab-ftp:
+    <<: *lab-host
+    build:
+      context: ./docker
+      dockerfile: ftp/Dockerfile
+    image: lab/host-ftp:1.0
+    container_name: lab-ftp
+    hostname: lab-ftp
+    mem_limit: 128m
+    environment:
+      <<: *lab-host-env
+      FTP_USER: ${FTP_USER:-ftpuser}
+      FTP_PASS: ${FTP_PASS:-ftp_lab_pass}
+    volumes:
+      - lab-ftp-data:/home/${FTP_USER:-ftpuser}
+      - ./config/ftp/vsftpd.conf:/etc/vsftpd.conf:ro
+      # Configuracion del agente Zabbix (montada como volumen, solo lectura)
+      - ./config/agent/zabbix_agent2.conf:/etc/zabbix/zabbix_agent2.conf:ro
+      - ./config/agent/lab-userparameters.conf:/etc/zabbix/zabbix_agent2.d/lab-userparameters.conf:ro
+      - ./config/agent/lab-cgroup.sh:/usr/local/bin/lab-cgroup.sh:ro
+    networks:
+      lab-net:
+        ipv4_address: 172.28.0.13
+
+  # ------------------------------------------------------------------
+  #  AUTOMATIZACION: configura hosts, templates, triggers, accion de correo
+  #  y dashboards mediante la API de Zabbix. Es idempotente: se puede repetir.
+  # ------------------------------------------------------------------
+  provisioner:
+    build:
+      context: .
+      dockerfile: docker/provisioner/Dockerfile
+    image: lab/provisioner:1.0
+    container_name: zabbix-provisioner
+    restart: "no"
+    depends_on:
+      zabbix-web:
+        condition: service_healthy
+    environment:
+      ZBX_URL: http://zabbix-web:8080/api_jsonrpc.php
+      ZBX_ADMIN_USER: ${ZBX_ADMIN_USER:-Admin}
+      ZBX_ADMIN_PASSWORD: ${ZBX_ADMIN_PASSWORD:-zabbix}
+      ZBX_MONITOR_USER: ${ZBX_MONITOR_USER:-zbx_monitor}
+      ZBX_MONITOR_PASSWORD: ${ZBX_MONITOR_PASSWORD:-zbx_monitor_pass}
+      FTP_USER: ${FTP_USER:-ftpuser}
+      FTP_PASS: ${FTP_PASS:-ftp_lab_pass}
+      ALERT_EMAIL: ${ALERT_EMAIL:-admin@lab.local}
+      MAILHOG_API: http://mailhog:8025
+    networks:
+      - lab-net
+
+networks:
+  lab-net:
+    name: lab-net                    # red con nombre explicito
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
+
+volumes:
+  zabbix-db-data:
+  lab-db-data:
+  lab-ftp-data:

@@ -1,0 +1,13 @@
+.git
+.env
+docs
+scripts
+config
+docker/web
+docker/db
+docker/dns
+docker/ftp
+docker/zabbix-server
+docker/common
+*.md
+*.png

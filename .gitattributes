@@ -1,0 +1,14 @@
+# Forzar finales de linea LF: los scripts se ejecutan dentro de contenedores Linux
+* text=auto
+*.sh text eol=lf
+*.conf text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+Dockerfile text eol=lf
+db.lab.local text eol=lf
+*.png binary
+*.pdf binary
+*.pptx binary
+*.docx binary

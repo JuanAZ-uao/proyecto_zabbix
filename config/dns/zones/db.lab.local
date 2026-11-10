@@ -1,0 +1,16 @@
+$TTL 300
+@       IN SOA  ns1.lab.local. admin.lab.local. (
+                2026111001 ; serial
+                3600       ; refresh
+                600        ; retry
+                86400      ; expire
+                300 )      ; negative TTL
+        IN NS   ns1.lab.local.
+
+ns1     IN A    172.28.0.12
+dns     IN A    172.28.0.12
+web     IN A    172.28.0.10
+db      IN A    172.28.0.11
+ftp     IN A    172.28.0.13
+zabbix  IN A    172.28.0.7
+mail    IN A    172.28.0.8

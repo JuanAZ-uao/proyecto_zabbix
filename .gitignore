@@ -1,0 +1,13 @@
+# Secretos locales (nunca subir contraseñas reales)
+.env
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporales de pruebas
+*.log
+docs/evidencias/tmp/
+__pycache__/
