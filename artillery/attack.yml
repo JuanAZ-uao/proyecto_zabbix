@@ -1,0 +1,41 @@
+# ==========================================================================
+#  Ataque de carga HTTP contra lab-web (nginx)
+#
+#  Se ejecuta DENTRO de lab-net, porque el puerto 80 de lab-web no esta
+#  publicado en el host: los hosts monitoreados son una red interna.
+#  Por eso el target usa el nombre del contenedor, resuelto por DNS de Docker.
+#
+#  Lanzar con:  scripts/test-artillery.sh
+#  Subir carga: aumenta arrivalRate del "Pico sostenido" (500 u 800).
+# ==========================================================================
+config:
+  target: "http://lab-web"
+  phases:
+    - name: "Calentamiento"
+      duration: 20
+      arrivalRate: 10
+    - name: "Rampa de carga"
+      duration: 40
+      arrivalRate: 20
+      rampTo: 200
+    - name: "Pico sostenido"
+      duration: 60
+      arrivalRate: 250
+  http:
+    timeout: 10
+    pool: 100
+
+scenarios:
+  # El 80 % del trafico pide la pagina principal y el 20 % una ruta inexistente,
+  # para ver tambien como responde nginx ante errores (http.codes.404).
+  - name: "Navegacion del sitio"
+    weight: 8
+    flow:
+      - get:
+          url: "/"
+
+  - name: "Recurso inexistente"
+    weight: 2
+    flow:
+      - get:
+          url: "/pagina-que-no-existe"

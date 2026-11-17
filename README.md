@@ -128,7 +128,8 @@ Además cada template oficial (Linux, Nginx, MySQL) aporta sus propios triggers.
 │   ├── server/                 # zabbix_server.conf.d/lab.conf
 │   ├── web|db|dns|ftp/         # nginx, init de MySQL, zona bind, vsftpd.conf
 ├── provisioning/               # lab_config.py (QUÉ configurar) · provision.py (CÓMO) · measure.py
-├── scripts/                    # pruebas: carga, caída de host/servicio, disco, reset de Mailhog
+├── artillery/                  # attack.yml: escenario de carga HTTP real (prueba 7)
+├── scripts/                    # pruebas: carga, caída de host/servicio, disco, Artillery, reset de Mailhog
 └── docs/                       # arquitectura, matriz de decisión, pruebas, problemas, informe, evidencias
 ```
 
@@ -146,8 +147,11 @@ Todos los scripts requieren solo Docker (se ejecutan con Git Bash / WSL / Linux 
 | 4 | Caída de **servicio** (contenedor vivo) | `scripts/test-service-down.sh ftp` (o `web`, `db`, `dns`) | Se detiene solo el proceso; salta el trigger del servicio, no el de host |
 | 5 | Disco | `scripts/test-disk-fill.sh web` / `… web limpiar` | Warning a 80 %, High a 90 % |
 | 6 | **Métricas históricas** | Frontend → Monitoring → *Latest data* → gráfico de cualquier ítem | Rango 1 h/24 h/7 d; sirven para tendencias, capacidad y análisis post-incidente |
+| 7 | **Carga HTTP real** (Artillery) · *adicional* | `scripts/test-artillery.sh` | Rampa de 20 a 250 req/s desde un contenedor en `lab-net`; suben *Requests per second* de nginx y la CPU de `lab-web` |
 
 `scripts/reset-mailhog.sh` vacía la bandeja antes de grabar la demo.
+
+La prueba 7 no la exige el catálogo: las anteriores generan carga **sintética** dentro del contenedor, mientras que Artillery inyecta **tráfico HTTP real** desde otro contenedor de `lab-net` (el puerto 80 de `lab-web` no está publicado en el host). Sirve para observar el servicio *bajo carga*, no solo para detectar caídas. El servicio `artillery` está bajo el perfil `carga`, así que no arranca con `docker compose up`.
 
 ---
 

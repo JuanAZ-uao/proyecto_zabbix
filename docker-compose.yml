@@ -251,6 +251,18 @@ services:
     networks:
       - lab-net
 
+  # ------------------------------------------------------------------
+  #  GENERADOR DE CARGA (perfil "carga": NO arranca con 'docker compose up')
+  # ------------------------------------------------------------------
+  artillery:
+    image: artilleryio/artillery:latest
+    profiles: ["carga"]
+    restart: "no"
+    volumes:
+      - ./artillery:/scripts:ro          # escenarios de carga montados como volumen
+    networks:
+      - lab-net                          # entra por la red interna: lab-web no publica el puerto 80
+
 networks:
   lab-net:
     name: lab-net                    # red con nombre explicito
